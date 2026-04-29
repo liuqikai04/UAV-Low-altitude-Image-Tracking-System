@@ -1,0 +1,13 @@
+# Example dataset yaml for YOLOv8-seg training.
+# Replace paths and class names with your own dataset.
+
+path: D:/datasets/uav-seg
+train: images/train
+val: images/val
+
+# Number of classes
+nc: 1
+
+# Class names in order
+names:
+  0: car
