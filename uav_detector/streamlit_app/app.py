@@ -65,6 +65,34 @@ def _localize_file_uploader():
     )
 
 
+def _get_selected_detection(detections, selected_index):
+    for det in detections:
+        if det["index"] == selected_index:
+            return det
+    return detections[0] if detections else None
+
+
+def _highlight_selected_detection(base_frame, selected_det):
+    if selected_det is None:
+        return base_frame
+
+    highlighted = base_frame.copy()
+    x1, y1, x2, y2 = [int(v) for v in selected_det["bbox"]]
+    label = f"{selected_det['index']}:{selected_det['class_name']} {selected_det['score']:.2f}"
+
+    cv2.rectangle(highlighted, (x1, y1), (x2, y2), (0, 0, 255), 2)
+    cv2.putText(
+        highlighted,
+        label,
+        (x1, max(16, y1 - 6)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (0, 0, 255),
+        2,
+    )
+    return highlighted
+
+
 st.set_page_config(page_title="无人机单目标跟踪系统", layout="wide")
 st.title("无人机低空图像单目标跟踪系统")
 _localize_file_uploader()
@@ -109,6 +137,8 @@ if "detected_frame_idx" not in st.session_state:
     st.session_state.detected_frame_idx = None
 if "detections" not in st.session_state:
     st.session_state.detections = []
+if "selected_detection_index" not in st.session_state:
+    st.session_state.selected_detection_index = None
 if "detected_frame_image" not in st.session_state:
     st.session_state.detected_frame_image = None
 if "selected_frame" not in st.session_state:
@@ -137,6 +167,7 @@ if video_file is not None:
         st.session_state.video_info = get_video_info(st.session_state.uploaded_video_path)
         st.session_state.detected_frame_idx = None
         st.session_state.detections = []
+        st.session_state.selected_detection_index = None
         st.session_state.detected_frame_image = None
         st.session_state.tracking_output_path = None
         st.session_state.tracking_output_bytes = None
@@ -194,22 +225,35 @@ if st.session_state.uploaded_video_path and st.session_state.video_info:
             )
         st.session_state.detected_frame_idx = selected_frame
         st.session_state.detections = detections
+        st.session_state.selected_detection_index = detections[0]["index"] if detections else None
         st.session_state.detected_frame_image = vis_frame
 
     if st.session_state.detected_frame_image is not None:
-        rgb = cv2.cvtColor(st.session_state.detected_frame_image, cv2.COLOR_BGR2RGB)
+        selected_det = _get_selected_detection(
+            st.session_state.detections,
+            st.session_state.selected_detection_index,
+        )
+        display_frame = _highlight_selected_detection(st.session_state.detected_frame_image, selected_det)
+        rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
         st.image(Image.fromarray(rgb), caption="识别结果（框内编号用于选择目标）", use_container_width=True)
 
     if st.session_state.detections:
-        options = []
-        for det in st.session_state.detections:
+        detection_indices = [det["index"] for det in st.session_state.detections]
+        if st.session_state.selected_detection_index not in detection_indices:
+            st.session_state.selected_detection_index = detection_indices[0]
+
+        def _format_detection_option(det_index):
+            det = _get_selected_detection(st.session_state.detections, det_index)
             x1, y1, x2, y2 = det["bbox"]
-            options.append(
-                f"[{det['index']}] {det['class_name']} 置信度={det['score']:.2f} 边界框=({x1},{y1},{x2},{y2})"
-            )
-        selected_option = st.selectbox("4) 选择要追踪的目标", options=options)
-        selected_det_idx = int(selected_option.split("]")[0].strip("["))
-        selected_det = next(d for d in st.session_state.detections if d["index"] == selected_det_idx)
+            return f"[{det['index']}] {det['class_name']} 置信度={det['score']:.2f} 边界框=({x1},{y1},{x2},{y2})"
+
+        selected_det_idx = st.selectbox(
+            "4) 选择要追踪的目标",
+            options=detection_indices,
+            format_func=_format_detection_option,
+            key="selected_detection_index",
+        )
+        selected_det = _get_selected_detection(st.session_state.detections, selected_det_idx)
 
         if st.button("5) 开始追踪并导出视频", use_container_width=True):
             progress = st.progress(0)
