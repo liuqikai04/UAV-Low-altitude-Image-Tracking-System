@@ -29,8 +29,45 @@ def _cleanup_uploaded_temp_file():
     _safe_remove_file(uploaded_path)
 
 
+def _localize_file_uploader():
+    st.markdown(
+        """
+        <style>
+        [data-testid="stFileUploaderDropzoneInstructions"] span {
+            font-size: 0;
+        }
+
+        [data-testid="stFileUploaderDropzoneInstructions"] span::after {
+            content: "拖拽文件到此处";
+            font-size: 1rem;
+        }
+
+        [data-testid="stFileUploaderDropzoneInstructions"] small {
+            font-size: 0;
+        }
+
+        [data-testid="stFileUploaderDropzoneInstructions"] small::after {
+            content: "单个文件限制 200MB · MP4、AVI、MOV、MKV、MPEG4";
+            font-size: 0.875rem;
+        }
+
+        [data-testid="stFileUploaderDropzone"] button {
+            font-size: 0;
+        }
+
+        [data-testid="stFileUploaderDropzone"] button::after {
+            content: "浏览文件";
+            font-size: 1rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 st.set_page_config(page_title="无人机单目标跟踪系统", layout="wide")
 st.title("无人机低空图像单目标跟踪系统")
+_localize_file_uploader()
 
 model_status = get_model_status()
 if not model_status["ready"]:
@@ -140,7 +177,7 @@ if st.session_state.uploaded_video_path and st.session_state.video_info:
     st.image(
         Image.fromarray(preview_rgb),
         caption=f"当前选择帧预览：frame={selected_frame}",
-        width="stretch",
+        use_container_width=True,
     )
 
     if st.button("3) 识别当前帧中的所有目标", use_container_width=True):
@@ -161,7 +198,7 @@ if st.session_state.uploaded_video_path and st.session_state.video_info:
 
     if st.session_state.detected_frame_image is not None:
         rgb = cv2.cvtColor(st.session_state.detected_frame_image, cv2.COLOR_BGR2RGB)
-        st.image(Image.fromarray(rgb), caption="识别结果（框内编号用于选择目标）", width="stretch")
+        st.image(Image.fromarray(rgb), caption="识别结果（框内编号用于选择目标）", use_container_width=True)
 
     if st.session_state.detections:
         options = []
