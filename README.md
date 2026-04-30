@@ -142,6 +142,18 @@ outputs/videos/
 - `仅检测车辆`：只保留车辆相关类别。
 - `跟踪视频显示分割掩码`：导出视频时叠加目标分割区域。
 
+## 自建数据集
+
+本项目使用的自建无人机低空图像/视频数据集可通过百度网盘下载：
+
+```text
+数据集名称：DJI-南京理工大学紫金学院高淳
+下载链接：https://pan.baidu.com/s/1tgOuKufiD6Tf6NY_8FzYYw?pwd=1111
+提取码：1111
+```
+
+下载后建议将数据集放入项目根目录下的 `trackingdatasets/` 目录。该目录已被 `.gitignore` 排除，不会被提交到 GitHub。
+
 ## VisDrone SOT 数据准备
 
 如果需要使用 VisDrone2019-SOT 训练单目标检测模型，先准备原始数据目录，例如：
