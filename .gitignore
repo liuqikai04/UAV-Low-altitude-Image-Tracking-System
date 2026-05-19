@@ -215,9 +215,17 @@ logs/
 wandb/
 mlruns/
 
-# Datasets should be kept outside Git
+# Datasets should be kept outside Git. Keep only trackingdatasets/.gitignore.
 trackingdatasets/*
 !trackingdatasets/.gitignore
+
+# Dataset archives are large local files and should not be pushed to GitHub.
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.tgz
 
 # Model checkpoints and pretrained weights
 *.pt
