@@ -1,0 +1,21 @@
+{
+  "settings_version": "0.0.6",
+  "datasets_dir": "D:\\Desktop\\UAV-Low-altitude-Image-Tracking-System\\UAV-Low-altitude-Image-Tracking-System\\UAV-Low-altitude-Image-Tracking-System\\datasets",
+  "weights_dir": "weights",
+  "runs_dir": "runs",
+  "uuid": "8faef20d307802effd0cf255341047fc52d8aa061cbc073eb6da2e7456f510e5",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "hub": true,
+  "mlflow": true,
+  "neptune": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}

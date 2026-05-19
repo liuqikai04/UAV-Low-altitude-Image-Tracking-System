@@ -19,6 +19,7 @@
 - 支持在跟踪视频中叠加分割掩码。
 - 集成 FusionSORTUAV 跟踪器，使用 Kalman Filter、IoU、置信度等信息进行目标关联。
 - 提供 VisDrone2019-SOT 数据转换脚本和 YOLOv8 训练脚本。
+- 提供 `UAVDT-Benchmark-S` 单目标验证脚本，可输出单目标预测框并计算 `Precision`、`Success`、`AUC`、`CLE` 等指标。
 - 集成 Easier_To_Use_TrackEval，便于后续进行多目标跟踪评估扩展。
 
 ## 项目结构
@@ -47,6 +48,12 @@
 │       └── uav_seg_data_template.yaml
 ├── trackingdatasets/
 │   └── .gitignore
+├── single_target_validation/
+│   ├── README.md
+│   └── run_uavdt_benchmark_s.py
+├── multi_target_validation/
+│   ├── README.md
+│   └── run_uavdt_benchmark_m.py
 ├── assets/
 │   └── .gitignore
 └── Easier_To_Use_TrackEval/
@@ -113,8 +120,10 @@ python uav_detector/streamlit_app/download_yolov8seg_model.py
 在项目根目录运行：
 
 ```powershell
-streamlit run uav_detector/streamlit_app/app.py
+python -m streamlit run uav_detector/streamlit_app/app.py --server.maxUploadSize=2048
 ```
+
+Windows 也可以直接双击项目根目录下的 `run_streamlit_2048mb.bat` 启动。
 
 打开页面后按以下步骤使用：
 
@@ -153,6 +162,158 @@ outputs/videos/
 ```
 
 下载后建议将数据集放入项目根目录下的 `trackingdatasets/` 目录。该目录已被 `.gitignore` 排除，不会被提交到 GitHub。
+
+## UAVDT 单目标测试与验证
+
+UAVDT 官方发布页：
+
+```text
+https://sites.google.com/view/daweidu/projects/uavdt
+```
+
+本项目的最终任务是交互式单目标追踪，因此推荐下载 `UAVDT-Benchmark-S`。下载后建议按下面结构放入：
+
+```text
+trackingdatasets/UAVDT-S/
+├── UAV-benchmark-S/
+│   ├── S0101/
+│   │   ├── img000001.jpg
+│   │   ├── ...
+│   │   └── img001784.jpg
+│   └── ...
+└── UAV-benchmark-SOT_v1.0/
+    └── anno/
+        ├── S0101_gt.txt
+        └── ...
+```
+
+项目新增了 `single_target_validation/` 目录，专门放置单目标验证代码。其中 `run_uavdt_benchmark_s.py` 会完成以下工作：
+
+1. 自动发现 `UAVDT-Benchmark-S` 序列。
+2. 使用首帧真值框初始化单目标。
+3. 从后续帧调用当前检测器和 `FusionSORTUAV` 继续追踪。
+4. 默认按标准 SOT 口径每帧输出预测框；也可切换到保留真实掉框行为的 `system` 模式。
+5. 输出单目标预测框，并评估 `Precision@20px`、`Success@0.5`、`AUC`、`Mean IoU`、`CLE`、`Found Rate`。
+6. 额外输出检测召回率、最长连续丢失帧数、重关联成功率和目标面积分布等诊断指标。
+
+直接运行全部可发现序列：
+
+```powershell
+python single_target_validation/run_uavdt_benchmark_s.py `
+  --data-root trackingdatasets/UAVDT-S `
+  --model-name yolov8s-seg `
+  --conf 0.30 `
+  --nms-iou 0.45 `
+  --imgsz 1024 `
+  --eval-mode sot `
+  --device cuda:0
+```
+
+两种评测口径的区别：
+
+- `--eval-mode sot`：标准单目标评测口径，适合论文主表；丢失时继续输出预测框，并用运动预测、中心距离和尺度约束做重关联。
+- `--eval-mode system`：保留网页端真实掉框语义，适合分析系统实际漏检。
+
+如果只是先验证流程，可以只跑单个序列：
+
+```powershell
+python single_target_validation/run_uavdt_benchmark_s.py `
+  --data-root trackingdatasets/UAVDT-S `
+  --sequences <sequence_name> `
+  --model-name yolov8s-seg `
+  --conf 0.35 `
+  --nms-iou 0.45 `
+  --imgsz 1024 `
+  --eval-mode sot `
+  --save-videos
+```
+
+如果需要更稳定地比较速度，可增加重复次数：
+
+```powershell
+python single_target_validation/run_uavdt_benchmark_s.py `
+  --data-root trackingdatasets/UAVDT-S `
+  --sequences S0101 `
+  --eval-mode sot `
+  --repeats 3
+```
+
+主要输出：
+
+```text
+outputs/uavdt_sot/
+├── predictions/             # 每帧预测框 x,y,w,h
+├── per_frame/               # 每帧 IoU、中心误差等
+├── videos/                  # 仅在 --save-videos 时生成
+├── repeat_summary.csv       # 仅在 --repeats > 1 时生成
+├── sequence_summary.csv
+└── overall_summary.csv
+```
+
+## UAVDT 多目标测试与验证
+
+如果需要按照 `UAVDT-Benchmark-M` 的多目标追踪方式验证底层追踪器能力，请下载 `UAVDT-Benchmark-M`，并按下面结构放置：
+
+```text
+trackingdatasets/UAVDT-M/
+├── UAV-benchmark-M/
+│   ├── M0203/
+│   ├── M0205/
+│   └── ...
+└── UAV-benchmark-MOTD_v1.0/
+    └── GT/
+        ├── M0203_gt.txt
+        ├── M0203_gt_ignore.txt
+        └── ...
+```
+
+当前脚本按官方解压后的真实目录读取：
+
+```text
+图像序列：trackingdatasets/UAVDT-M/UAV-benchmark-M/<seq>/img000001.jpg
+MOT 标注：trackingdatasets/UAVDT-M/UAV-benchmark-MOTD_v1.0/GT/<seq>_gt.txt
+忽略区域：trackingdatasets/UAVDT-M/UAV-benchmark-MOTD_v1.0/GT/<seq>_gt_ignore.txt
+```
+
+项目新增了 `multi_target_validation/` 目录，其中 `run_uavdt_benchmark_m.py` 会输出你论文计划采用的指标：
+
+```text
+IDF1, MOTA, MOTP, FP, FN, IDS, FM, HOTA
+```
+
+完整运行全部 20 条官方测试序列：
+
+```powershell
+python multi_target_validation/run_uavdt_benchmark_m.py `
+  --data-root trackingdatasets/UAVDT-M `
+  --model-name yolov8s-seg `
+  --conf 0.35 `
+  --nms-iou 0.45 `
+  --imgsz 1024
+```
+
+只跑一个序列验证流程：
+
+```powershell
+python multi_target_validation/run_uavdt_benchmark_m.py `
+  --data-root trackingdatasets/UAVDT-M `
+  --sequences M0203 `
+  --save-videos
+```
+
+主要输出：
+
+```text
+outputs/uavdt_mot/
+├── tracker_results/
+│   └── fusion_sort_uav/
+│       └── data/
+├── videos/
+├── sequence_summary.csv
+├── selected_metrics.csv
+├── uavdt_eval_config.yaml
+└── trackeval/
+```
 
 ## VisDrone SOT 数据准备
 

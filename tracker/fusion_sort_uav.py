@@ -348,7 +348,8 @@ class FusionSORTUAV(object):
         if self.args.with_confidence:
             confidence_dists = matching.confidence_distance(strack_pool, detections)
 
-        ious_dists = matching.fuse_score(ious_dists, detections)  # Fusing IoU with detection score
+        if self.args.use_score_fusion:
+            ious_dists = matching.fuse_score(ious_dists, detections)  # Fusing IoU with detection score
 
         # Apply weighted sum fusion method: ious_dists, hious_dists and confidence_dists
         dists = ious_dists
@@ -372,46 +373,49 @@ class FusionSORTUAV(object):
                 track.re_activate(det, self.frame_id, new_id=False, with_nsa=self.args.with_nsa)
                 refind_stracks.append(track)  # lost tracks matched with detection (within self.max_time_lost)
 
-        ''' Step 3: Second association, with low score detection boxes'''
-        if len(scores):
-            inds_high = scores < self.args.track_high_thresh
-            inds_low = scores > self.args.track_low_thresh
-            inds_second = np.logical_and(inds_low, inds_high)
-            dets_second = bboxes[inds_second]
-            scores_second = scores[inds_second]
-            classes_second = classes[inds_second]
-        else:
-            dets_second = []
-            scores_second = []
-            classes_second = []
-
-        # Associate the untrack to the low score detections
-        if len(dets_second) > 0:
-            '''Detections'''
-            detections_second = [STrack(STrack.tlbr_to_tlwh(tlbr), s, c) for
-                                 (tlbr, s, c) in zip(dets_second, scores_second, classes_second)]
-        else:
-            detections_second = []
-
         r_tracked_stracks = [strack_pool[i] for i in u_track if strack_pool[i].state == TrackState.Tracked]  # lost_tracks (inactive tracks) are not considered in the 2nd association.
-        if self.args.second_matching_distance == 'iou':
-            # IoU is used for all fusion methods for 2nd association
-            dists = matching.iou_distance(r_tracked_stracks, detections_second, dist_type="iou")
-        elif self.args.second_matching_distance == 'mahalanobis':
-            dists = matching.mahalanobis_distance(self.kalman_filter, r_tracked_stracks, detections_second)
-        else:
-            raise ValueError('Select the correct matching distance method: iou or mahalanobis')
-
-        matches, u_track, u_detection_second = matching.linear_assignment(dists, thresh=0.5)  # emb_dists doesn't help!
-        for itracked, idet in matches:
-            track = r_tracked_stracks[itracked]
-            det = detections_second[idet]
-            if track.state == TrackState.Tracked:
-                track.update(det, self.frame_id, self.args.with_nsa)   # Apply Kalman filter update
-                activated_starcks.append(track)
+        if self.args.use_second_association:
+            ''' Step 3: Second association, with low score detection boxes'''
+            if len(scores):
+                inds_high = scores < self.args.track_high_thresh
+                inds_low = scores > self.args.track_low_thresh
+                inds_second = np.logical_and(inds_low, inds_high)
+                dets_second = bboxes[inds_second]
+                scores_second = scores[inds_second]
+                classes_second = classes[inds_second]
             else:
-                track.re_activate(det, self.frame_id, new_id=False, with_nsa=self.args.with_nsa)
-                refind_stracks.append(track)
+                dets_second = []
+                scores_second = []
+                classes_second = []
+
+            # Associate the untrack to the low score detections
+            if len(dets_second) > 0:
+                '''Detections'''
+                detections_second = [STrack(STrack.tlbr_to_tlwh(tlbr), s, c) for
+                                     (tlbr, s, c) in zip(dets_second, scores_second, classes_second)]
+            else:
+                detections_second = []
+
+            if self.args.second_matching_distance == 'iou':
+                # IoU is used for all fusion methods for 2nd association
+                dists = matching.iou_distance(r_tracked_stracks, detections_second, dist_type="iou")
+            elif self.args.second_matching_distance == 'mahalanobis':
+                dists = matching.mahalanobis_distance(self.kalman_filter, r_tracked_stracks, detections_second)
+            else:
+                raise ValueError('Select the correct matching distance method: iou or mahalanobis')
+
+            matches, u_track, u_detection_second = matching.linear_assignment(dists, thresh=0.5)  # emb_dists doesn't help!
+            for itracked, idet in matches:
+                track = r_tracked_stracks[itracked]
+                det = detections_second[idet]
+                if track.state == TrackState.Tracked:
+                    track.update(det, self.frame_id, self.args.with_nsa)   # Apply Kalman filter update
+                    activated_starcks.append(track)
+                else:
+                    track.re_activate(det, self.frame_id, new_id=False, with_nsa=self.args.with_nsa)
+                    refind_stracks.append(track)
+        else:
+            u_track = tuple(range(len(r_tracked_stracks)))
 
         for it in u_track:
             track = r_tracked_stracks[it]
@@ -430,7 +434,8 @@ class FusionSORTUAV(object):
         if self.args.with_confidence:
             confidence_dists = matching.confidence_distance(unconfirmed, detections)
 
-        ious_dists = matching.fuse_score(ious_dists, detections)  # Fusing IoU with detection score
+        if self.args.use_score_fusion:
+            ious_dists = matching.fuse_score(ious_dists, detections)  # Fusing IoU with detection score
 
         # Apply weighted sum fusion method: ious_dists, hious_dists and confidence_dists
         dists = ious_dists

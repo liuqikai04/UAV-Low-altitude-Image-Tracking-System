@@ -1,18 +1,24 @@
 import os
 import cv2
 import atexit
+import shutil
 import tempfile
 import streamlit as st
+from streamlit import config as st_config
 from PIL import Image
 
 from uav_inference import (
     get_available_models,
+    get_device_status,
     get_model_status,
     get_video_info,
     get_video_frame,
+    make_web_playable_video,
     detect_and_segment_on_frame,
     track_selected_object,
 )
+
+UPLOAD_LIMIT_MB = 2048
 
 
 def _safe_remove_file(path):
@@ -25,13 +31,36 @@ def _safe_remove_file(path):
 
 @atexit.register
 def _cleanup_uploaded_temp_file():
-    uploaded_path = st.session_state.get("uploaded_video_path") if hasattr(st, "session_state") else None
-    _safe_remove_file(uploaded_path)
+    if not hasattr(st, "session_state"):
+        return
+    _safe_remove_file(st.session_state.get("uploaded_video_path"))
+    _safe_remove_file(st.session_state.get("uploaded_video_preview_path"))
 
 
-def _localize_file_uploader():
-    st.markdown(
-        """
+def _create_web_preview(video_path, spinner_text="正在生成网页可播放预览..."):
+    preview_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix="_preview.mp4") as preview_tmp:
+            preview_path = preview_tmp.name
+        with st.spinner(spinner_text):
+            make_web_playable_video(video_path, output_path=preview_path, max_width=1280)
+        with open(preview_path, "rb") as f:
+            preview_bytes = f.read()
+        return preview_path, preview_bytes, None
+    except Exception as exc:
+        _safe_remove_file(preview_path)
+        return None, None, str(exc)
+
+
+def _get_runtime_upload_limit_mb():
+    try:
+        return int(st_config.get_option("server.maxUploadSize"))
+    except Exception:
+        return 200
+
+
+def _localize_file_uploader(upload_limit_mb):
+    uploader_css = """
         <style>
         [data-testid="stFileUploaderDropzoneInstructions"] span {
             font-size: 0;
@@ -47,7 +76,7 @@ def _localize_file_uploader():
         }
 
         [data-testid="stFileUploaderDropzoneInstructions"] small::after {
-            content: "单个文件限制 200MB · MP4、AVI、MOV、MKV、MPEG4";
+            content: "单个文件限制 __UPLOAD_LIMIT_MB__MB · MP4、AVI、MOV、MKV、MPEG4";
             font-size: 0.875rem;
         }
 
@@ -60,7 +89,9 @@ def _localize_file_uploader():
             font-size: 1rem;
         }
         </style>
-        """,
+        """
+    st.markdown(
+        uploader_css.replace("__UPLOAD_LIMIT_MB__", str(upload_limit_mb)),
         unsafe_allow_html=True,
     )
 
@@ -80,7 +111,7 @@ def _highlight_selected_detection(base_frame, selected_det):
     x1, y1, x2, y2 = [int(v) for v in selected_det["bbox"]]
     label = f"{selected_det['index']}:{selected_det['class_name']} {selected_det['score']:.2f}"
 
-    cv2.rectangle(highlighted, (x1, y1), (x2, y2), (0, 0, 255), 2)
+    cv2.rectangle(highlighted, (x1, y1), (x2, y2), (0, 0, 255), 4)
     cv2.putText(
         highlighted,
         label,
@@ -95,7 +126,13 @@ def _highlight_selected_detection(base_frame, selected_det):
 
 st.set_page_config(page_title="无人机单目标跟踪系统", layout="wide")
 st.title("无人机低空图像单目标跟踪系统")
-_localize_file_uploader()
+runtime_upload_limit_mb = _get_runtime_upload_limit_mb()
+_localize_file_uploader(runtime_upload_limit_mb)
+if runtime_upload_limit_mb < UPLOAD_LIMIT_MB:
+    st.warning(
+        f"当前运行中的 Streamlit 上传上限仍是 {runtime_upload_limit_mb}MB。"
+        f"请关闭当前服务后重新启动，或使用项目根目录下的 run_streamlit_2048mb.bat。"
+    )
 
 model_status = get_model_status()
 if not model_status["ready"]:
@@ -104,6 +141,12 @@ if not model_status["ready"]:
     st.stop()
 
 st.sidebar.header("推理参数")
+device_status = get_device_status()
+if device_status["using_gpu"]:
+    st.sidebar.success(device_status["message"])
+else:
+    st.sidebar.warning(device_status["message"])
+
 available_models = get_available_models()
 if "yolov8s-seg" in available_models:
     default_model = "yolov8s-seg"
@@ -126,11 +169,18 @@ input_size = st.sidebar.selectbox(
 enhance_small_objects = st.sidebar.checkbox("小目标增强检测（较慢）", value=True)
 only_vehicles = st.sidebar.checkbox("仅检测车辆（car/bus/truck/van）", value=True)
 with_mask = st.sidebar.checkbox("追踪视频显示分割掩码", value=True)
+st.sidebar.caption("当前帧识别使用 CPU；追踪导出默认使用 GPU。")
 
 if "uploaded_video_path" not in st.session_state:
     st.session_state.uploaded_video_path = None
+if "uploaded_video_preview_path" not in st.session_state:
+    st.session_state.uploaded_video_preview_path = None
 if "uploaded_video_name" not in st.session_state:
     st.session_state.uploaded_video_name = None
+if "uploaded_video_suffix" not in st.session_state:
+    st.session_state.uploaded_video_suffix = None
+if "uploaded_video_size" not in st.session_state:
+    st.session_state.uploaded_video_size = None
 if "video_info" not in st.session_state:
     st.session_state.video_info = None
 if "detected_frame_idx" not in st.session_state:
@@ -145,42 +195,105 @@ if "selected_frame" not in st.session_state:
     st.session_state.selected_frame = 0
 if "tracking_output_path" not in st.session_state:
     st.session_state.tracking_output_path = None
+if "tracking_output_txt_path" not in st.session_state:
+    st.session_state.tracking_output_txt_path = None
 if "tracking_output_bytes" not in st.session_state:
     st.session_state.tracking_output_bytes = None
 if "tracking_target_id" not in st.session_state:
     st.session_state.tracking_target_id = None
 if "uploaded_video_bytes" not in st.session_state:
     st.session_state.uploaded_video_bytes = None
+if "uploaded_video_preview_bytes" not in st.session_state:
+    st.session_state.uploaded_video_preview_bytes = None
+if "uploaded_video_preview_error" not in st.session_state:
+    st.session_state.uploaded_video_preview_error = None
 
 video_file = st.file_uploader("1) 上传无人机视频", type=["mp4", "avi", "mov", "mkv"])
 if video_file is not None:
     current_name = st.session_state.get("uploaded_video_name")
-    if st.session_state.uploaded_video_path is None or current_name != video_file.name:
+    current_size = st.session_state.get("uploaded_video_size")
+    if st.session_state.get("uploaded_video_suffix") is None:
+        st.session_state.uploaded_video_suffix = (os.path.splitext(video_file.name)[1] or ".mp4").lower()
+    if (
+        st.session_state.uploaded_video_path is None
+        or current_name != video_file.name
+        or current_size != video_file.size
+    ):
         _safe_remove_file(st.session_state.uploaded_video_path)
+        _safe_remove_file(st.session_state.uploaded_video_preview_path)
         suffix = os.path.splitext(video_file.name)[1] or ".mp4"
-        uploaded_bytes = video_file.getvalue()
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(uploaded_bytes)
+            video_file.seek(0)
+            shutil.copyfileobj(video_file, tmp)
             st.session_state.uploaded_video_path = tmp.name
-        st.session_state.uploaded_video_bytes = uploaded_bytes
+        st.session_state.uploaded_video_bytes = None
+        st.session_state.uploaded_video_preview_path = None
+        st.session_state.uploaded_video_preview_bytes = None
+        st.session_state.uploaded_video_preview_error = None
         st.session_state.uploaded_video_name = video_file.name
+        st.session_state.uploaded_video_suffix = suffix.lower()
+        st.session_state.uploaded_video_size = video_file.size
         st.session_state.video_info = get_video_info(st.session_state.uploaded_video_path)
+
+        if suffix.lower() != ".mp4":
+            preview_path, preview_bytes, preview_error = _create_web_preview(st.session_state.uploaded_video_path)
+            st.session_state.uploaded_video_preview_path = preview_path
+            st.session_state.uploaded_video_preview_bytes = preview_bytes
+            st.session_state.uploaded_video_preview_error = preview_error
+            if preview_error:
+                st.warning(f"网页预览转码失败，将尝试直接播放原视频：{preview_error}")
+
         st.session_state.detected_frame_idx = None
         st.session_state.detections = []
         st.session_state.selected_detection_index = None
         st.session_state.detected_frame_image = None
         st.session_state.tracking_output_path = None
+        st.session_state.tracking_output_txt_path = None
         st.session_state.tracking_output_bytes = None
         st.session_state.tracking_target_id = None
+
+if (
+    video_file is not None
+    and st.session_state.uploaded_video_path
+    and st.session_state.get("uploaded_video_suffix") != ".mp4"
+    and st.session_state.uploaded_video_preview_bytes is None
+    and st.session_state.uploaded_video_preview_error is None
+):
+    preview_path, preview_bytes, preview_error = _create_web_preview(st.session_state.uploaded_video_path)
+    st.session_state.uploaded_video_preview_path = preview_path
+    st.session_state.uploaded_video_preview_bytes = preview_bytes
+    st.session_state.uploaded_video_preview_error = preview_error
+    if preview_error:
+        st.warning(f"网页预览转码失败，将尝试直接播放原视频：{preview_error}")
 
 if st.session_state.uploaded_video_path and st.session_state.video_info:
     video_path = st.session_state.uploaded_video_path
     info = st.session_state.video_info
 
-    if st.session_state.uploaded_video_bytes is not None:
+    if st.session_state.uploaded_video_preview_bytes is not None:
+        st.video(st.session_state.uploaded_video_preview_bytes)
+    elif st.session_state.uploaded_video_bytes is not None:
         st.video(st.session_state.uploaded_video_bytes)
     else:
         st.video(video_path)
+
+    if (
+        st.session_state.get("uploaded_video_suffix") == ".mp4"
+        and st.session_state.uploaded_video_preview_bytes is None
+    ):
+        if st.button("视频无法播放时，点击修复预览", use_container_width=True):
+            preview_path, preview_bytes, preview_error = _create_web_preview(
+                video_path,
+                spinner_text="正在修复视频预览...",
+            )
+            st.session_state.uploaded_video_preview_path = preview_path
+            st.session_state.uploaded_video_preview_bytes = preview_bytes
+            st.session_state.uploaded_video_preview_error = preview_error
+            if preview_error:
+                st.warning(f"预览修复失败：{preview_error}")
+            else:
+                st.rerun()
+
     st.caption(
         f"视频信息：{info['width']}x{info['height']} | FPS={info['fps']:.2f} | 总帧数={info['frame_count']}"
     )
@@ -222,6 +335,7 @@ if st.session_state.uploaded_video_path and st.session_state.video_info:
                 model_name=selected_model,
                 enhance_small_objects=enhance_small_objects,
                 only_vehicles=only_vehicles,
+                inference_device="cpu",
             )
         st.session_state.detected_frame_idx = selected_frame
         st.session_state.detections = detections
@@ -258,7 +372,7 @@ if st.session_state.uploaded_video_path and st.session_state.video_info:
         if st.button("5) 开始追踪并导出视频", use_container_width=True):
             progress = st.progress(0)
             with st.spinner("正在进行单目标追踪，这可能需要一些时间..."):
-                out_path, target_track_id = track_selected_object(
+                out_path, txt_path, target_track_id = track_selected_object(
                     video_path,
                     selected_frame_idx=st.session_state.detected_frame_idx,
                     selected_bbox=selected_det["bbox"],
@@ -273,6 +387,7 @@ if st.session_state.uploaded_video_path and st.session_state.video_info:
                 )
             if os.path.exists(out_path):
                 st.session_state.tracking_output_path = out_path
+                st.session_state.tracking_output_txt_path = txt_path if os.path.exists(txt_path) else None
                 st.session_state.tracking_target_id = target_track_id
             else:
                 st.error("追踪输出失败，未找到结果视频。")
@@ -281,15 +396,26 @@ if st.session_state.uploaded_video_path and st.session_state.video_info:
 
     if st.session_state.tracking_output_path is not None and os.path.exists(st.session_state.tracking_output_path):
         if st.session_state.tracking_target_id is None:
-            st.warning("在所选帧未能稳定匹配到追踪 ID，结果视频可能不会出现目标框。")
+            st.warning("未绑定稳定追踪 ID，已按 SOT 预测与重关联逻辑输出目标框。")
         else:
-            st.success(f"追踪完成。目标 ID={st.session_state.tracking_target_id}")
-        st.video(st.session_state.tracking_output_path)
+            st.success(f"追踪完成。目标 ID={st.session_state.tracking_target_id}，已启用 SOT 预测与重关联输出。")
         with open(st.session_state.tracking_output_path, "rb") as f:
+            tracking_video_bytes = f.read()
+        st.video(tracking_video_bytes)
+        st.download_button(
+            "下载追踪视频",
+            data=tracking_video_bytes,
+            file_name=os.path.basename(st.session_state.tracking_output_path or "track_single.mp4"),
+            mime="video/mp4",
+            use_container_width=True,
+        )
+        if st.session_state.tracking_output_txt_path is not None and os.path.exists(st.session_state.tracking_output_txt_path):
+            with open(st.session_state.tracking_output_txt_path, "rb") as f:
+                tracking_txt_bytes = f.read()
             st.download_button(
-                "下载追踪视频",
-                data=f,
-                file_name=os.path.basename(st.session_state.tracking_output_path or "track_single.mp4"),
-                mime="video/mp4",
+                "下载目标位置TXT",
+                data=tracking_txt_bytes,
+                file_name=os.path.basename(st.session_state.tracking_output_txt_path),
+                mime="text/plain",
                 use_container_width=True,
             )
